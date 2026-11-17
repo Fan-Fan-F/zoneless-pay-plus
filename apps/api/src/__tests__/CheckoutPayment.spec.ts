@@ -585,5 +585,79 @@ describe('CheckoutPaymentModule', () => {
         })
       );
     });
+
+    it('should auto-expire session when expires_at is past', async () => {
+      const session = BuildOpenSession({
+        payment_intent: null,
+        expires_at: GetFixedTimestamp() - 3600,
+      });
+      jest
+        .spyOn(checkoutSessionModule, 'GetCheckoutSessionByUrlSlug')
+        .mockResolvedValue(session);
+      const expireSpy = jest
+        .spyOn(checkoutSessionModule, 'ExpireCheckoutSession')
+        .mockResolvedValue({ ...session, status: 'expired' });
+
+      await expect(
+        module.PreparePayment(session.url_slug, 'PayerWallet111', {
+          email: 'buyer@example.com',
+        })
+      ).rejects.toThrow('This Checkout Session has expired');
+
+      expect(expireSpy).toHaveBeenCalledWith(session.id);
+    });
+
+    it('should record partial payment details on session and ledger when amount received is less than total', async () => {
+      const session = BuildOpenSession();
+      const paymentIntent = BuildPaymentIntent();
+      const processing = {
+        ...paymentIntent,
+        status: 'processing' as const,
+      };
+
+      jest
+        .spyOn(checkoutSessionModule, 'GetCheckoutSessionByUrlSlug')
+        .mockResolvedValue(session);
+      const recordPartialSpy = jest
+        .spyOn(checkoutSessionModule, 'RecordPartialPayment')
+        .mockResolvedValue({
+          ...session,
+          payment_status: 'partially_paid',
+        });
+
+      mockDb.Get = jest
+        .fn()
+        .mockImplementation((collection: string, id: string) => {
+          if (collection === 'PaymentIntents') {
+            return Promise.resolve(processing);
+          }
+          if (collection === 'Charges') {
+            return Promise.resolve({ id, balance_transaction: 'txn_1' });
+          }
+          return Promise.resolve(null);
+        });
+
+      mockSolana.VerifyCheckoutPayment.mockResolvedValue({
+        verified: false,
+        payer_address: 'PayerWallet111',
+        amount_cents: 600,
+        failure_reason:
+          'Insufficient amount: expected 1000 cents, received 600 cents',
+      });
+
+      await expect(
+        module.ConfirmPayment(session.url_slug, 'sig_partial_test')
+      ).rejects.toThrow(/Insufficient amount/);
+
+      expect(recordPartialSpy).toHaveBeenCalledWith(
+        session.id,
+        expect.objectContaining({
+          transaction_signature: 'sig_partial_test',
+          payer_wallet: 'PayerWallet111',
+          amount_received: 600,
+          amount_expected: 1000,
+        })
+      );
+    });
   });
 });

@@ -715,6 +715,119 @@ export class CheckoutSessionModule {
   }
 
   /**
+   * Record a partial payment received on-chain for a checkout session.
+   * Updates payment_status to 'partially_paid', records actual received amount
+   * and expected amount in payment_details and metadata, and emits event.
+   *
+   * @param id - The checkout session ID
+   * @param details - Partial payment details
+   * @returns The updated CheckoutSession
+   */
+  async RecordPartialPayment(
+    id: string,
+    details: {
+      transaction_signature: string;
+      payer_wallet: string | null;
+      amount_received: number;
+      amount_expected: number;
+      failure_reason?: string;
+    }
+  ): Promise<CheckoutSessionType> {
+    const previousSession = await this.GetCheckoutSession(id);
+    if (!previousSession) {
+      throw new AppError(
+        ERRORS.CHECKOUT_SESSION_NOT_FOUND.message,
+        ERRORS.CHECKOUT_SESSION_NOT_FOUND.status,
+        ERRORS.CHECKOUT_SESSION_NOT_FOUND.type
+      );
+    }
+
+    const remainingAmount = Math.max(
+      0,
+      details.amount_expected - details.amount_received
+    );
+
+    const updatedMetadata = {
+      ...(previousSession.metadata || {}),
+      partial_payment: 'true',
+      amount_received: String(details.amount_received),
+      amount_expected: String(details.amount_expected),
+      remaining_amount: String(remainingAmount),
+    };
+
+    await this.db.Update<CheckoutSessionType>('CheckoutSessions', id, {
+      payment_status: 'partially_paid',
+      payment_details: {
+        transaction_signature: details.transaction_signature,
+        payer_wallet: details.payer_wallet,
+        amount_received: details.amount_received,
+        amount_expected: details.amount_expected,
+        partial_payment: true,
+      },
+      metadata: updatedMetadata,
+    });
+
+    const session = await this.GetCheckoutSession(id);
+    if (!session) {
+      throw new AppError(
+        ERRORS.CHECKOUT_SESSION_NOT_FOUND.message,
+        ERRORS.CHECKOUT_SESSION_NOT_FOUND.status,
+        ERRORS.CHECKOUT_SESSION_NOT_FOUND.type
+      );
+    }
+
+    if (this.eventService) {
+      await this.eventService.Emit(
+        'checkout.session.completed',
+        session.platform_account,
+        session
+      );
+    }
+
+    return session;
+  }
+
+  /**
+   * Sweep and expire all sessions that have passed their `expires_at` timestamp
+   * and are still in `open` status.
+   *
+   * @param platformAccount - Optional platform account to filter by
+   * @returns Summary with count and expired session IDs
+   */
+  async ExpireStaleCheckoutSessions(platformAccount?: string): Promise<{
+    count: number;
+    expired_ids: string[];
+  }> {
+    const filter: Record<string, unknown> = {
+      status: 'open',
+      expires_at: { $lt: Now(), $ne: null },
+    };
+    if (platformAccount) {
+      filter.platform_account = platformAccount;
+    }
+
+    const staleSessions = await this.db.Aggregate<CheckoutSessionType>(
+      'CheckoutSessions',
+      [{ $match: filter }]
+    );
+
+    const expiredIds: string[] = [];
+    for (const session of staleSessions) {
+      try {
+        await this.ExpireCheckoutSession(session.id);
+        expiredIds.push(session.id);
+      } catch {
+        // Skip session if it was already updated or concurrently modified
+      }
+    }
+
+    return {
+      count: expiredIds.length,
+      expired_ids: expiredIds,
+    };
+  }
+
+  /**
    * Record customer details collected on the hosted checkout page before
    * payment. Persists email, name, phone, address, tax IDs, custom field
    * values, and terms consent onto the open session.

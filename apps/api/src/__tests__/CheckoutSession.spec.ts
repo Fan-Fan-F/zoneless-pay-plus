@@ -925,4 +925,96 @@ describe('CheckoutSessionModule', () => {
       ).toThrow('Invalid starting_after ID');
     });
   });
+
+  describe('ExpireStaleCheckoutSessions', () => {
+    it('should sweep and expire open sessions that passed their expires_at', async () => {
+      const expiredSession1 = {
+        ...BuildOpenSession(),
+        id: 'cs_z_stale1',
+        expires_at: GetFixedTimestamp() - 100,
+      };
+      const expiredSession2 = {
+        ...BuildOpenSession(),
+        id: 'cs_z_stale2',
+        expires_at: GetFixedTimestamp() - 50,
+      };
+
+      mockDb.Aggregate = jest
+        .fn()
+        .mockResolvedValue([expiredSession1, expiredSession2]);
+
+      const expireSpy = jest
+        .spyOn(module, 'ExpireCheckoutSession')
+        .mockResolvedValueOnce({ ...expiredSession1, status: 'expired' })
+        .mockResolvedValueOnce({ ...expiredSession2, status: 'expired' });
+
+      const result = await module.ExpireStaleCheckoutSessions('acct_z_platform');
+
+      expect(mockDb.Aggregate).toHaveBeenCalledWith(
+        'CheckoutSessions',
+        [
+          {
+            $match: expect.objectContaining({
+              status: 'open',
+              platform_account: 'acct_z_platform',
+            }),
+          },
+        ]
+      );
+      expect(expireSpy).toHaveBeenCalledTimes(2);
+      expect(result).toEqual({
+        count: 2,
+        expired_ids: ['cs_z_stale1', 'cs_z_stale2'],
+      });
+    });
+  });
+
+  describe('RecordPartialPayment', () => {
+    it('should record partial payment details and emit checkout.session.partially_paid', async () => {
+      const openSession = BuildOpenSession();
+      const updatedSession = {
+        ...openSession,
+        payment_status: 'partially_paid' as const,
+        payment_details: {
+          transaction_signature: 'sig_partial',
+          payer_wallet: 'PayerWallet111',
+          amount_received: 600,
+          amount_expected: 1000,
+          partial_payment: true,
+        },
+      };
+
+      mockDb.Get = jest
+        .fn()
+        .mockResolvedValueOnce(openSession)
+        .mockResolvedValueOnce(updatedSession);
+
+      const result = await module.RecordPartialPayment(openSession.id, {
+        transaction_signature: 'sig_partial',
+        payer_wallet: 'PayerWallet111',
+        amount_received: 600,
+        amount_expected: 1000,
+      });
+
+      expect(mockDb.Update).toHaveBeenCalledWith(
+        'CheckoutSessions',
+        openSession.id,
+        expect.objectContaining({
+          payment_status: 'partially_paid',
+          payment_details: expect.objectContaining({
+            transaction_signature: 'sig_partial',
+            amount_received: 600,
+            amount_expected: 1000,
+            partial_payment: true,
+          }),
+        })
+      );
+      expect(eventService.Emit).toHaveBeenCalledWith(
+        'checkout.session.completed',
+        'acct_z_platform',
+        updatedSession
+      );
+      expect(result.payment_status).toBe('partially_paid');
+    });
+  });
 });

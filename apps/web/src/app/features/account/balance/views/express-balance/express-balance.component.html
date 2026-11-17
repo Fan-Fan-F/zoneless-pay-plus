@@ -34,6 +34,14 @@
     >
       Payouts
     </button>
+    <button
+      type="button"
+      class="tab-button"
+      [class.tab-active]="balanceTab() === 'reconciliation'"
+      (click)="SetBalanceTab('reconciliation')"
+    >
+      Reconciliation
+    </button>
   </div>
 
   @if (balanceTab() === 'all') {
@@ -47,5 +55,45 @@
     [limit]="10"
     [queryParams]="payoutQueryParams"
   ></app-transaction-list>
+  } @if (balanceTab() === 'reconciliation') {
+  <div class="reconciliation-panel">
+    @if (reportingService.reconciliationLoading()) {
+    <div class="reconciliation-loading">Loading reconciliation data...</div>
+    } @else if (reportingService.reconciliationSummary(); as rec) {
+    <div class="reconciliation-grid">
+      <div class="rec-card">
+        <div class="rec-label">Gross Volume</div>
+        <div class="rec-value">${{ (rec.gross_volume / 100) | number : '1.2-2' }} USDC</div>
+        <div class="rec-sub">{{ rec.charges_count }} transaction(s)</div>
+      </div>
+      <div class="rec-card">
+        <div class="rec-label">Platform & Network Fees</div>
+        <div class="rec-value">-${{ (rec.total_fees / 100) | number : '1.2-2' }} USDC</div>
+        <div class="rec-sub">Deductions</div>
+      </div>
+      <div class="rec-card">
+        <div class="rec-label">Payouts Settled</div>
+        <div class="rec-value">-${{ (rec.total_payouts_settled / 100) | number : '1.2-2' }} USDC</div>
+        <div class="rec-sub">{{ rec.payouts_count }} payout(s)</div>
+      </div>
+      <div class="rec-card">
+        <div class="rec-label">Ending Ledger Balance</div>
+        <div class="rec-value highlight">${{ (rec.ending_balance / 100) | number : '1.2-2' }} USDC</div>
+        <div class="rec-sub">
+          @if (rec.discrepancies_count === 0) {
+          <span class="status-balanced">✓ Fully reconciled</span>
+          } @else {
+          <span class="status-discrepancy">⚠ {{ rec.discrepancies_count }} discrepancy item(s) flagged</span>
+          }
+        </div>
+      </div>
+    </div>
+    <div class="rec-actions">
+      <button type="button" class="action-button action-button-dainty outline" (click)="RefreshReconciliation()">
+        Refresh Reconciliation
+      </button>
+    </div>
+    }
+  </div>
   }
 </div>

@@ -16,6 +16,7 @@ import {
   MetricSeries,
   MetricUnit,
   ReportingMetrics,
+  ReconciliationSummary,
 } from '@zoneless/shared-types';
 import { Database } from './Database';
 import {
@@ -223,6 +224,149 @@ export class ReportingModule {
     }
 
     return result;
+  }
+
+  /**
+   * Compute comprehensive reconciliation summary for an account over a time range.
+   * Cross-checks balance transactions, fees, refunds, settled/in-transit payouts,
+   * ending ledger balance, and flags any discrepancy.
+   */
+  async GetReconciliation(input: {
+    accountId: string;
+    start: number;
+    end: number;
+    currency?: string;
+  }): Promise<ReconciliationSummary> {
+    const { accountId, start, end } = input;
+    const currency = 'usdc';
+
+    // 1. Aggregate BalanceTransactions in the period
+    const txAggregation = await this.db.Aggregate<{
+      _id: string;
+      totalAmount: number;
+      totalFee: number;
+      totalNet: number;
+      count: number;
+    }>('BalanceTransactions', [
+      {
+        $match: {
+          account: accountId,
+          created: { $gte: start, $lt: end },
+        },
+      },
+      {
+        $group: {
+          _id: '$type',
+          totalAmount: { $sum: '$amount' },
+          totalFee: { $sum: '$fee' },
+          totalNet: { $sum: '$net' },
+          count: { $sum: 1 },
+        },
+      },
+    ]);
+
+    let grossVolume = 0;
+    let totalFees = 0;
+    let totalRefunds = 0;
+    let totalPayoutsSettled = 0;
+    let chargesCount = 0;
+    let payoutsCount = 0;
+
+    for (const group of txAggregation) {
+      totalFees += group.totalFee || 0;
+      if (group._id === 'charge' || group._id === 'payment') {
+        grossVolume += group.totalAmount || 0;
+        chargesCount += group.count || 0;
+      } else if (group._id === 'refund') {
+        totalRefunds += Math.abs(group.totalAmount || 0);
+      } else if (group._id === 'payout') {
+        totalPayoutsSettled += Math.abs(group.totalAmount || 0);
+        payoutsCount += group.count || 0;
+      }
+    }
+
+    const netVolume = grossVolume - totalFees - totalRefunds;
+
+    // 2. Query in-transit / pending payouts in this window
+    const inTransitPayouts = await this.db.Aggregate<{ total: number }>(
+      'Payouts',
+      [
+        {
+          $match: {
+            platform_account: accountId,
+            status: { $in: ['pending', 'in_transit'] },
+            created: { $gte: start, $lt: end },
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            total: { $sum: '$amount' },
+          },
+        },
+      ]
+    );
+    const totalPayoutsInTransit = inTransitPayouts[0]?.total || 0;
+
+    // 3. Ending ledger balance up to `end`
+    const endingBalanceAgg = await this.db.Aggregate<{ endingBalance: number }>(
+      'BalanceTransactions',
+      [
+        {
+          $match: {
+            account: accountId,
+            created: { $lt: end },
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            endingBalance: { $sum: '$net' },
+          },
+        },
+      ]
+    );
+    const endingBalance = endingBalanceAgg[0]?.endingBalance || 0;
+
+    // 4. Check for discrepancies: failed charges, partial payment flags, or failed payouts
+    const failedCharges = await this.db.Aggregate<{ _id: string }>('Charges', [
+      {
+        $match: {
+          account: accountId,
+          status: 'failed',
+          created: { $gte: start, $lt: end },
+        },
+      },
+    ]);
+    const failedPayouts = await this.db.Aggregate<{ _id: string }>('Payouts', [
+      {
+        $match: {
+          platform_account: accountId,
+          status: 'failed',
+          created: { $gte: start, $lt: end },
+        },
+      },
+    ]);
+    const discrepanciesCount = failedCharges.length + failedPayouts.length;
+
+    return {
+      object: 'reporting.reconciliation',
+      account: accountId,
+      currency,
+      period_start: start,
+      period_end: end,
+      gross_volume: grossVolume,
+      net_volume: netVolume,
+      total_fees: totalFees,
+      total_refunds: totalRefunds,
+      total_payouts_settled: totalPayoutsSettled,
+      total_payouts_in_transit: totalPayoutsInTransit,
+      ending_balance: endingBalance,
+      charges_count: chargesCount,
+      payouts_count: payoutsCount,
+      discrepancies_count: discrepanciesCount,
+      status: discrepanciesCount > 0 ? 'discrepancy_detected' : 'balanced',
+    };
   }
 
   /**

@@ -157,6 +157,36 @@ router.get(
 );
 
 /**
+ * POST /v1/checkout/sessions/expire_stale
+ * Sweep and expire all open checkout sessions that have passed their expires_at timestamp.
+ *
+ * @zoneless_extension
+ */
+router.post(
+  '/expire_stale',
+  RequirePlatform(),
+  AsyncHandler(async (req: express.Request, res: express.Response) => {
+    const platformAccountId = req.user.account;
+
+    Logger.info('Sweeping stale checkout sessions', { platformAccountId });
+
+    const result = await checkoutSessionModule.ExpireStaleCheckoutSessions(
+      platformAccountId
+    );
+
+    Logger.info('Stale checkout sessions expired', {
+      platformAccountId,
+      count: result.count,
+    });
+
+    res.json({
+      object: 'checkout.sweep_result',
+      ...result,
+    });
+  })
+);
+
+/**
  * POST /v1/checkout/sessions/:id/expire
  * Expire a checkout session.
  */

@@ -21,6 +21,7 @@ export * from './PayoutSchema';
 export * from './PersonSchema';
 export * from './PriceSchema';
 export * from './ProductSchema';
+export * from './ReportingSchema';
 export * from './SubscriptionItemSchema';
 export * from './SubscriptionSchema';
 export * from './TopUpSchema';

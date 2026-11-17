@@ -84,3 +84,37 @@ export interface ReportingMetricsParams {
   /** IANA timezone for bucket boundaries (e.g. America/Los_Angeles). */
   timezone?: string;
 }
+
+/**
+ * Reconciliation summary breakdown for platform or connected seller account.
+ * Aggregates gross volume, platform/network fees, payouts, refunds, and checks discrepancies.
+ *
+ * @zoneless_extension
+ */
+export interface ReconciliationSummary {
+  object: 'reporting.reconciliation';
+  account: string;
+  currency: 'usdc';
+  period_start: number;
+  period_end: number;
+  gross_volume: number;
+  net_volume: number;
+  total_fees: number;
+  total_refunds: number;
+  total_payouts_settled: number;
+  total_payouts_in_transit: number;
+  ending_balance: number;
+  charges_count: number;
+  payouts_count: number;
+  discrepancies_count: number;
+  status: 'balanced' | 'discrepancy_detected';
+}
+
+/** Query parameters accepted by GET /v1/reporting/reconciliation. */
+export interface ReconciliationParams {
+  start?: number;
+  end?: number;
+  account?: string;
+  currency?: string;
+}
+

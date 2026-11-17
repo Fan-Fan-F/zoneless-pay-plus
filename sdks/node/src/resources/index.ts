@@ -21,6 +21,8 @@ export { Payouts } from './Payouts';
 export { Persons } from './Persons';
 export { Prices } from './Prices';
 export { Products } from './Products';
+export { Reporting } from './Reporting';
+export type { ReportingRequestOptions } from './Reporting';
 export { Checkout } from './Checkout';
 export { CheckoutSessions } from './CheckoutSessions';
 export { Subscriptions } from './Subscriptions';

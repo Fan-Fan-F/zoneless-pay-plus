@@ -1,6 +1,12 @@
 import { BaseResource } from './Base';
 import { ApplyDateFilter } from '../utils';
-import { BalanceTransaction, ListResponse } from '@zoneless/shared-types';
+import {
+  BalanceTransaction,
+  ListResponse,
+  ReconciliationSummary,
+  ReconciliationParams,
+} from '@zoneless/shared-types';
+import type { RequestExtraOptions } from '../HttpClient';
 import type { ListBalanceTransactionsInput } from '../generated/Inputs';
 
 export interface BalanceTransactionRequestOptions {
@@ -12,16 +18,33 @@ export interface BalanceTransactionRequestOptions {
  * @see https://docs.zoneless.com/balance-transactions
  */
 export class BalanceTransactions extends BaseResource {
+  /**
+   * Retrieve reconciliation report for the account.
+   *
+   * @see https://docs.zoneless.com/reporting/reconciliation
+   */
+  async reconciliation(
+    params: ReconciliationParams = {},
+    options: BalanceTransactionRequestOptions = {}
+  ): Promise<ReconciliationSummary> {
+    const requestOptions = this.BuildOptions(options);
+    return this.client.Get<ReconciliationSummary>(
+      '/reporting/reconciliation',
+      params as Record<string, string | number | undefined>,
+      requestOptions
+    );
+  }
+
   /** @see https://docs.zoneless.com/balance-transactions/retrieve */
   async retrieve(
     id: string,
     options: BalanceTransactionRequestOptions = {}
   ): Promise<BalanceTransaction> {
-    const headers = this.BuildHeaders(options);
+    const requestOptions = this.BuildOptions(options);
     return this.client.Get<BalanceTransaction>(
       `/balance_transactions/${id}`,
       undefined,
-      headers
+      requestOptions
     );
   }
 
@@ -31,19 +54,19 @@ export class BalanceTransactions extends BaseResource {
     options: BalanceTransactionRequestOptions = {}
   ): Promise<ListResponse<BalanceTransaction>> {
     const query = this.BuildQuery(params);
-    const headers = this.BuildHeaders(options);
+    const requestOptions = this.BuildOptions(options);
     return this.client.Get<ListResponse<BalanceTransaction>>(
       '/balance_transactions',
       query,
-      headers
+      requestOptions
     );
   }
 
-  private BuildHeaders(
+  private BuildOptions(
     options: BalanceTransactionRequestOptions
-  ): Record<string, string> | undefined {
+  ): RequestExtraOptions | undefined {
     if (options.zonelessAccount) {
-      return { 'Zoneless-Account': options.zonelessAccount };
+      return { zonelessAccount: options.zonelessAccount };
     }
     return undefined;
   }

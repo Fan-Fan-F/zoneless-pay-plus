@@ -317,7 +317,7 @@ export interface CheckoutSession {
   /** A list of the types of payment methods this Checkout Session is allowed to accept. */
   payment_method_types: string[];
   /** The payment status of the Checkout Session. Use this value to decide when to fulfill your customer's order. */
-  payment_status: 'no_payment_required' | 'paid' | 'unpaid';
+  payment_status: 'no_payment_required' | 'paid' | 'unpaid' | 'partially_paid';
   /** Used to set up permissions for various actions (e.g., update) on the CheckoutSession object. */
   permissions: {
     /** Determines which entity is allowed to update the shipping details. Default is client_only. */
@@ -473,6 +473,12 @@ export interface CheckoutSession {
     transaction_signature: string | null;
     /** The customer wallet that paid / subscribed. */
     payer_wallet: string | null;
+    /** Actual amount received on-chain in cents. */
+    amount_received?: number | null;
+    /** Expected order amount in cents. */
+    amount_expected?: number | null;
+    /** True if payment was only partially received. */
+    partial_payment?: boolean | null;
   } | null;
 
   /**

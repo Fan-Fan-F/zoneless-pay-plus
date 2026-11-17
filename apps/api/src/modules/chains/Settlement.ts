@@ -167,6 +167,18 @@ export class SimulatedSettlement {
         failure_reason: 'Invalid simulated payment',
       };
     }
+    if (signature.includes(':partial_')) {
+      const match = signature.match(/:partial_(\d+)/);
+      const partialCents = match
+        ? parseInt(match[1], 10)
+        : Math.floor(expected.amountInCents / 2);
+      return {
+        verified: false,
+        amount_cents: partialCents,
+        payer_address: payerAddress.replace(/:partial_\d+/, ''),
+        failure_reason: `Insufficient amount: expected ${expected.amountInCents} cents, received ${partialCents} cents`,
+      };
+    }
     return {
       verified: true,
       amount_cents: expected.amountInCents,

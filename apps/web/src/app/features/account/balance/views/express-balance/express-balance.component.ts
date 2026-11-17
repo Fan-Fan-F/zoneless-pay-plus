@@ -9,7 +9,7 @@ import {
 import { DecimalPipe } from '@angular/common';
 
 import type { PaginatedListColumn } from '../../../../../shared';
-import { BalanceService } from '../../../../../data';
+import { BalanceService, ReportingService } from '../../../../../data';
 import { TransactionListComponent } from '../../../components';
 import { MetaService } from '../../../../../core';
 
@@ -22,9 +22,11 @@ import { MetaService } from '../../../../../core';
 })
 export class ExpressBalanceComponent implements OnInit {
   readonly balanceService = inject(BalanceService);
+  readonly reportingService = inject(ReportingService);
   private readonly metaService = inject(MetaService);
 
-  balanceTab: WritableSignal<'all' | 'payouts'> = signal('all');
+  balanceTab: WritableSignal<'all' | 'payouts' | 'reconciliation'> =
+    signal('all');
 
   balanceTransactionColumns: PaginatedListColumn[] = [
     {
@@ -79,7 +81,14 @@ export class ExpressBalanceComponent implements OnInit {
     return this.balanceService.GetAvailableBalance('usdc') / 100;
   }
 
-  SetBalanceTab(tab: 'all' | 'payouts'): void {
+  SetBalanceTab(tab: 'all' | 'payouts' | 'reconciliation'): void {
     this.balanceTab.set(tab);
+    if (tab === 'reconciliation' && !this.reportingService.reconciliationSummary()) {
+      void this.reportingService.GetReconciliation();
+    }
+  }
+
+  RefreshReconciliation(): void {
+    void this.reportingService.GetReconciliation();
   }
 }

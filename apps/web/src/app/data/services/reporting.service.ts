@@ -5,6 +5,7 @@ import {
   MetricId,
   MetricInterval,
   ReportingMetrics,
+  ReconciliationSummary,
 } from '@zoneless/shared-types';
 
 export interface FetchMetricsOptions {
@@ -29,9 +30,38 @@ export class ReportingService {
   overviewLoading: WritableSignal<boolean> = signal(false);
   todayLoading: WritableSignal<boolean> = signal(false);
 
+  reconciliationSummary: WritableSignal<ReconciliationSummary | null> =
+    signal(null);
+  reconciliationLoading: WritableSignal<boolean> = signal(false);
+
   Reset(): void {
     this.overviewMetrics.set(null);
     this.todayMetrics.set(null);
+    this.reconciliationSummary.set(null);
+  }
+
+  async GetReconciliation(options?: {
+    start?: number;
+    end?: number;
+    account?: string;
+  }): Promise<ReconciliationSummary> {
+    this.reconciliationLoading.set(true);
+    try {
+      const params: Record<string, string> = {};
+      if (options?.start !== undefined) params['start'] = String(options.start);
+      if (options?.end !== undefined) params['end'] = String(options.end);
+      if (options?.account) params['account'] = options.account;
+
+      const summary = await this.api.Call<ReconciliationSummary>(
+        'GET',
+        'reporting/reconciliation',
+        params
+      );
+      this.reconciliationSummary.set(summary);
+      return summary;
+    } finally {
+      this.reconciliationLoading.set(false);
+    }
   }
 
   async GetTodayMetrics(): Promise<ReportingMetrics> {

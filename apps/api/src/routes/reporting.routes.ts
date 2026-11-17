@@ -13,6 +13,8 @@ import { ERRORS } from '../utils/Errors';
 import { Logger } from '../utils/Logger';
 import { RequirePlatform } from '../middleware/Authorization';
 import { db } from '../modules/Database';
+import { AccountModule } from '../modules/Account';
+import { CanAccessAccount } from '../modules/PlatformAccess';
 import {
   ParseCompare,
   ParseInterval,
@@ -24,6 +26,7 @@ import {
 
 const router = express.Router();
 const reportingModule = new ReportingModule(db);
+const accountModule = new AccountModule(db);
 
 /**
  * GET /v1/reporting/metrics
@@ -105,6 +108,82 @@ router.get(
     });
 
     res.json(result);
+  })
+);
+
+/**
+ * GET /v1/reporting/reconciliation
+ *
+ * Query params:
+ * - start, end: unix seconds (defaults to trailing 30 days)
+ * - account: optional target connected account ID (if caller is platform)
+ * - currency: default "usdc"
+ */
+router.get(
+  '/reconciliation',
+  AsyncHandler(async (req: express.Request, res: express.Response) => {
+    if (!req.user) {
+      throw new AppError(
+        ERRORS.UNAUTHORIZED.message,
+        ERRORS.UNAUTHORIZED.status,
+        ERRORS.UNAUTHORIZED.type
+      );
+    }
+
+    let targetAccountId = req.user.account;
+    const requestedAccount =
+      typeof req.query.account === 'string'
+        ? req.query.account
+        : (req.headers['stripe-account'] as string | undefined) ||
+          (req.headers['zoneless-account'] as string | undefined);
+
+    if (requestedAccount && requestedAccount !== req.user.account) {
+      const targetAccount = await accountModule.GetAccount(requestedAccount);
+      if (!targetAccount) {
+        throw new AppError(
+          ERRORS.ACCOUNT_NOT_FOUND.message,
+          ERRORS.ACCOUNT_NOT_FOUND.status,
+          ERRORS.ACCOUNT_NOT_FOUND.type
+        );
+      }
+      if (!CanAccessAccount(req.user.account, targetAccount)) {
+        throw new AppError(
+          ERRORS.NOT_ACCOUNT_OWNER.message,
+          ERRORS.NOT_ACCOUNT_OWNER.status,
+          ERRORS.NOT_ACCOUNT_OWNER.type
+        );
+      }
+      targetAccountId = requestedAccount;
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+    const start = req.query.start
+      ? Number(req.query.start)
+      : now - 30 * 24 * 60 * 60;
+    const end = req.query.end ? Number(req.query.end) : now;
+
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start > end) {
+      throw new AppError(
+        'start and end must be valid unix timestamps with start <= end',
+        ERRORS.INVALID_REQUEST.status,
+        ERRORS.INVALID_REQUEST.type
+      );
+    }
+
+    Logger.info('Retrieving reconciliation summary', {
+      targetAccountId,
+      start,
+      end,
+    });
+
+    const reconciliation = await reportingModule.GetReconciliation({
+      accountId: targetAccountId,
+      start,
+      end,
+      currency: 'usdc',
+    });
+
+    res.json(reconciliation);
   })
 );
 

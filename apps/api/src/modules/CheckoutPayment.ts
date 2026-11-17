@@ -153,7 +153,15 @@ export class CheckoutPaymentModule {
    * the merchant's receiving wallet, display details, and expanded products.
    */
   async GetPaymentPageSession(urlSlug: string): Promise<CheckoutSession> {
-    const session = await this.GetSessionOrThrow(urlSlug);
+    let session = await this.GetSessionOrThrow(urlSlug);
+    if (
+      session.status === 'open' &&
+      session.expires_at &&
+      session.expires_at < Now()
+    ) {
+      await this.checkoutSessionModule.ExpireCheckoutSession(session.id);
+      session = await this.GetSessionOrThrow(urlSlug);
+    }
     const [merchantWallet, account, expandedSession] = await Promise.all([
       this.ResolveMerchantWallet(session.platform_account),
       this.accountModule.GetAccount(session.platform_account),
@@ -263,7 +271,7 @@ export class CheckoutPaymentModule {
     }
 
     const session = await this.GetSessionOrThrow(urlSlug);
-    this.AssertSessionPayable(session);
+    await this.AssertSessionPayable(session);
 
     // Existing customers with an email cannot change it at checkout.
     const lockedEmail = session.customer
@@ -429,7 +437,7 @@ export class CheckoutPaymentModule {
       return this.SanitizeCheckoutSession(session);
     }
 
-    this.AssertSessionPayable(session);
+    await this.AssertSessionPayable(session);
 
     if (session.mode === 'subscription' && options?.already_subscribed) {
       return this.ConfirmSubscriptionFromExistingOnChain(
@@ -479,7 +487,7 @@ export class CheckoutPaymentModule {
       await this.checkoutSessionModule.GetCheckoutSessionByTransactionSignature(
         resolvedSignature
       );
-    if (existingSession) {
+    if (existingSession && existingSession.id !== session.id) {
       throw new AppError(
         'This transaction has already been used for another Checkout Session',
         ERRORS.INVALID_REQUEST.status,
@@ -571,13 +579,50 @@ export class CheckoutPaymentModule {
     if (!verification.verified) {
       const failureMessage =
         verification.failure_reason || 'Payment verification failed';
+
+      // Detect partial payment: on-chain funds were received, but less than expected
+      const isPartialPayment =
+        verification.amount_cents > 0 &&
+        session.amount_total !== null &&
+        verification.amount_cents < session.amount_total;
+
+      const chargeAmount = isPartialPayment
+        ? verification.amount_cents
+        : session.amount_total!;
+
       const failedCharge = await this.CreateCheckoutCharge(session, {
-        amount: session.amount_total!,
+        amount: chargeAmount,
         signature,
         payerAddress: verification.payer_address,
         outcome: 'failed',
         failureMessage,
       });
+
+      if (isPartialPayment) {
+        // Record partial payment on session with exact received and expected amounts
+        await this.checkoutSessionModule.RecordPartialPayment(session.id, {
+          transaction_signature: signature,
+          payer_wallet: verification.payer_address,
+          amount_received: verification.amount_cents,
+          amount_expected: session.amount_total!,
+          failure_reason: failureMessage,
+        });
+
+        // Record the received funds on the ledger so merchant balance matches on-chain funds
+        const balanceTx = await this.RecordPaymentOnLedger(
+          session,
+          verification.amount_cents,
+          verification.payer_address,
+          signature
+        );
+        if (failedCharge && this.chargeModule) {
+          await this.chargeModule.AttachBalanceTransaction(
+            failedCharge.id,
+            balanceTx.id
+          );
+        }
+      }
+
       await this.MarkPaymentIntentFailed(
         session,
         failureMessage,
@@ -1137,7 +1182,20 @@ export class CheckoutPaymentModule {
    * Ensure a checkout session can accept a payment: it must be open, unpaid,
    * and not past its expiry time.
    */
-  private AssertSessionPayable(session: CheckoutSession): void {
+  private async AssertSessionPayable(session: CheckoutSession): Promise<void> {
+    if (
+      session.status === 'open' &&
+      session.expires_at &&
+      session.expires_at < Now()
+    ) {
+      await this.checkoutSessionModule.ExpireCheckoutSession(session.id);
+      throw new AppError(
+        'This Checkout Session has expired',
+        ERRORS.INVALID_REQUEST.status,
+        ERRORS.INVALID_REQUEST.type
+      );
+    }
+
     if (session.status !== 'open' || session.payment_status !== 'unpaid') {
       throw new AppError(
         'This Checkout Session is no longer accepting payments',

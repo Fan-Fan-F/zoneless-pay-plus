@@ -7,10 +7,12 @@ import {
   ParseCompare,
   ParseInterval,
   ParseMetricIds,
+  ReportingModule,
   ResolveTodayPreset,
   RowsToBucketMap,
   TruncateToBucket,
 } from '../modules/Reporting';
+import { Database } from '../modules/Database';
 
 describe('Reporting helpers', () => {
   describe('ParseMetricIds', () => {
@@ -186,6 +188,60 @@ describe('Reporting helpers', () => {
 
       expect(map.get(Math.floor(bucket.getTime() / 1000))).toBe(4200);
       expect(map.size).toBe(1);
+    });
+  });
+
+  describe('GetReconciliation', () => {
+    it('aggregates balance transactions and checks discrepancy flags', async () => {
+      const mockDb = {
+        Aggregate: jest.fn().mockImplementation((collection: string, pipeline: any[]) => {
+          if (collection === 'BalanceTransactions') {
+            if (pipeline[0]?.$match?.created?.$lt && !pipeline[0]?.$match?.created?.$gte) {
+              return Promise.resolve([{ endingBalance: 5700 }]);
+            }
+            return Promise.resolve([
+              {
+                _id: 'charge',
+                totalAmount: 10000,
+                totalFee: 300,
+                totalNet: 9700,
+                count: 2,
+              },
+              {
+                _id: 'payout',
+                totalAmount: -4000,
+                totalFee: 0,
+                totalNet: -4000,
+                count: 1,
+              },
+            ]);
+          }
+          if (collection === 'Payouts') {
+            if (pipeline[0]?.$match?.status === 'failed') {
+              return Promise.resolve([]);
+            }
+            return Promise.resolve([{ total: 1000 }]);
+          }
+          return Promise.resolve([]);
+        }),
+      } as unknown as Database;
+
+      const reportingModule = new ReportingModule(mockDb);
+      const result = await reportingModule.GetReconciliation({
+        accountId: 'acct_test',
+        start: 1700000000,
+        end: 1702592000,
+      });
+
+      expect(result.object).toBe('reporting.reconciliation');
+      expect(result.account).toBe('acct_test');
+      expect(result.gross_volume).toBe(10000);
+      expect(result.total_fees).toBe(300);
+      expect(result.total_payouts_settled).toBe(4000);
+      expect(result.total_payouts_in_transit).toBe(1000);
+      expect(result.ending_balance).toBe(5700);
+      expect(result.discrepancies_count).toBe(0);
+      expect(result.status).toBe('balanced');
     });
   });
 });
